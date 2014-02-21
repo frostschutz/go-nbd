@@ -5,7 +5,15 @@
 // Package nbd uses the Linux NBD layer to emulate a block device in user space
 package nbd
 
+import (
+	"os"
+	"runtime"
+	"syscall"
+)
+
 const (
+	// Defined in <linux/fs.h>:
+	BLKROSET = 4701
 	// Defined in <linux/nbd.h>:
 	NBD_SET_SOCK        = 43776
 	NBD_SET_BLKSIZE     = 43777
@@ -35,3 +43,30 @@ const (
 	NBD_REPLY_MAGIC   = 0x67446698
 	// Do *not* use magics: 0x12560953 0x96744668.
 )
+
+// DeviceInfo interface is a subset of os.FileInfo.
+type DeviceInfo interface {
+	Size() int64
+}
+
+// Device interface is a subset of os.File.
+type Device interface {
+	Stat() (di DeviceInfo, err error)
+	ReadAt(b []byte, off int64) (n int, err error)
+	WriteAt(b []byte, off int64) (n int, err error)
+}
+
+func Client(b Device) {
+	runtime.LockOSThread()
+	nbd := os.Open("/dev/nbd0") // TODO: find a free one
+	fd, _ := Syscall.Socketpair(SOCK_STREAM, AF_UNIX, 0)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, fd[0])
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_BLKSIZE, 4096)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SIZE_BLOCKS, b.Stat().Size()/4096)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_FLAGS, 0)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), BLKROSET, 0)  // || 1
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DO_IT, 0) // doesn't return
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DISCONNECT, 0)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_CLEAR_SOCK, 0)
+	runtime.UnlockOSThread()
+}
