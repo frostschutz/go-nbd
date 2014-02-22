@@ -22,10 +22,10 @@ const (
 	NBD_CLEAR_SOCK      = 43780
 	NBD_CLEAR_QUE       = 43781
 	NBD_PRINT_DEBUG     = 43782
-	NBD_SET_SIZE_BLOCKS = 43782
-	NBD_DISCONNECT      = 43783
-	NBD_SET_TIMEOUT     = 43784
-	NBD_SET_FLAGS       = 43785
+	NBD_SET_SIZE_BLOCKS = 43783
+	NBD_DISCONNECT      = 43784
+	NBD_SET_TIMEOUT     = 43785
+	NBD_SET_FLAGS       = 43786
 	// enum
 	NBD_CMD_READ  = 0
 	NBD_CMD_WRITE = 1
@@ -44,26 +44,29 @@ const (
 	// Do *not* use magics: 0x12560953 0x96744668.
 )
 
-// DeviceInfo interface is a subset of os.FileInfo.
-type DeviceInfo interface {
-	Size() int64
-}
-
 // Device interface is a subset of os.File.
 type Device interface {
-	Stat() (di DeviceInfo, err error)
 	ReadAt(b []byte, off int64) (n int, err error)
 	WriteAt(b []byte, off int64) (n int, err error)
 }
 
-func Client(b Device) {
+func handle(fd int) {
+	buf := make([]byte, 1024)
+
+	for {
+		syscall.Read(fd, buf)
+	}
+}
+
+func Client(d Device, offset int64, size int64) {
+	nbd, _ := os.Open("/dev/nbd0") // TODO: find a free one
+	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
+	go handle(fd[1])
 	runtime.LockOSThread()
-	nbd := os.Open("/dev/nbd0") // TODO: find a free one
-	fd, _ := Syscall.Socketpair(SOCK_STREAM, AF_UNIX, 0)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, fd[0])
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_BLKSIZE, 4096)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SIZE_BLOCKS, b.Stat().Size()/4096)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_FLAGS, 0)
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SIZE_BLOCKS, uintptr(size/4096))
+	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_FLAGS, 1)
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), BLKROSET, 0)  // || 1
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DO_IT, 0) // doesn't return
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DISCONNECT, 0)
