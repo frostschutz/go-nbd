@@ -6,6 +6,9 @@
 package nbd
 
 import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
 	"os"
 	"runtime"
 	"syscall"
@@ -50,11 +53,30 @@ type Device interface {
 	WriteAt(b []byte, off int64) (n int, err error)
 }
 
+type request struct {
+	magic  uint32
+	typus  uint32
+	handle uint64
+	from   uint64
+	len    uint32
+}
+
 func handle(fd int) {
 	buf := make([]byte, 1024)
 
+	var x request
+
 	for {
-		syscall.Read(fd, buf)
+		n, _ := syscall.Read(fd, buf)
+		b := bytes.NewReader(buf[0:n])
+		binary.Read(b, binary.BigEndian, &x.magic)
+		binary.Read(b, binary.BigEndian, &x.typus)
+		binary.Read(b, binary.BigEndian, &x.handle)
+		binary.Read(b, binary.BigEndian, &x.from)
+		binary.Read(b, binary.BigEndian, &x.len)
+		fmt.Println("read", buf[0:n], x)
+		// syscall.Write(fd, buf[0:n])
+		// fmt.Println("wrote", buf[0:n])
 	}
 }
 
