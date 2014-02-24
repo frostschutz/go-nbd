@@ -6,7 +6,6 @@
 package nbd
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -61,20 +60,47 @@ type request struct {
 	len    uint32
 }
 
-func handle(fd int) {
-	buf := make([]byte, 1024)
-
+func handle(fd int, d Device) {
+	buf := make([]byte, 2<<19)
 	var x request
 
 	for {
-		n, _ := syscall.Read(fd, buf)
-		b := bytes.NewReader(buf[0:n])
-		binary.Read(b, binary.BigEndian, &x.magic)
-		binary.Read(b, binary.BigEndian, &x.typus)
-		binary.Read(b, binary.BigEndian, &x.handle)
-		binary.Read(b, binary.BigEndian, &x.from)
-		binary.Read(b, binary.BigEndian, &x.len)
-		fmt.Println("read", buf[0:n], x)
+		syscall.Read(fd, buf)
+		x.magic = binary.BigEndian.Uint32(buf)
+		x.typus = binary.BigEndian.Uint32(buf[4:8])
+		x.handle = binary.BigEndian.Uint64(buf[8:16])
+		x.from = binary.BigEndian.Uint64(buf[16:24])
+		x.len = binary.BigEndian.Uint32(buf[24:28])
+
+		fmt.Println("read", x)
+
+		switch x.magic {
+		case NBD_REPLY_MAGIC:
+			fallthrough
+		case NBD_REQUEST_MAGIC:
+			switch x.typus {
+			case NBD_CMD_READ:
+				n, _ := d.ReadAt(buf[16:16+x.len], int64(x.from))
+				fmt.Println("got", n, "bytes to send back")
+				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
+				binary.BigEndian.PutUint32(buf[4:8], 0)
+				n, _ = syscall.Write(fd, buf[0:16+x.len])
+				fmt.Println("actually wrote", n-16)
+			case NBD_CMD_WRITE:
+				fmt.Println("write", x)
+			case NBD_CMD_DISC:
+				panic("Disconnect")
+			case NBD_CMD_FLUSH:
+				fmt.Println("flush", x)
+			case NBD_CMD_TRIM:
+				fmt.Println("trim", x)
+			default:
+				panic("unknown command")
+			}
+		default:
+			panic("Invalid packet")
+		}
+
 		// syscall.Write(fd, buf[0:n])
 		// fmt.Println("wrote", buf[0:n])
 	}
@@ -82,8 +108,8 @@ func handle(fd int) {
 
 func Client(d Device, offset int64, size int64) {
 	nbd, _ := os.Open("/dev/nbd0") // TODO: find a free one
-	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
-	go handle(fd[1])
+	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_INET, 0)
+	go handle(fd[1], d)
 	runtime.LockOSThread()
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_BLKSIZE, 4096)
