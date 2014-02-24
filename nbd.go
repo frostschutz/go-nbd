@@ -7,7 +7,7 @@ package nbd
 
 import (
 	"encoding/binary"
-	"fmt"
+	//"fmt"
 	"os"
 	"runtime"
 	"syscall"
@@ -65,14 +65,18 @@ func handle(fd int, d Device) {
 	var x request
 
 	for {
-		syscall.Read(fd, buf)
+		n, err := syscall.Read(fd, buf[0:28])
+		if err != nil {
+			n += 1
+		}
+		//fmt.Println("actually read", n, err)
 		x.magic = binary.BigEndian.Uint32(buf)
 		x.typus = binary.BigEndian.Uint32(buf[4:8])
 		x.handle = binary.BigEndian.Uint64(buf[8:16])
 		x.from = binary.BigEndian.Uint64(buf[16:24])
 		x.len = binary.BigEndian.Uint32(buf[24:28])
 
-		fmt.Println("read", x)
+		//fmt.Println("read", x)
 
 		switch x.magic {
 		case NBD_REPLY_MAGIC:
@@ -80,20 +84,20 @@ func handle(fd int, d Device) {
 		case NBD_REQUEST_MAGIC:
 			switch x.typus {
 			case NBD_CMD_READ:
-				n, _ := d.ReadAt(buf[16:16+x.len], int64(x.from))
-				fmt.Println("got", n, "bytes to send back")
+				n, _ = d.ReadAt(buf[16:16+x.len], int64(x.from))
+				//fmt.Println("got", n, "bytes to send back")
 				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
 				binary.BigEndian.PutUint32(buf[4:8], 0)
-				n, _ = syscall.Write(fd, buf[0:16+x.len])
-				fmt.Println("actually wrote", n-16)
+				n, err = syscall.Write(fd, buf[0:16+x.len])
+				//fmt.Println("actually wrote", n-16, err)
 			case NBD_CMD_WRITE:
-				fmt.Println("write", x)
+				//fmt.Println("write", x)
 			case NBD_CMD_DISC:
 				panic("Disconnect")
 			case NBD_CMD_FLUSH:
-				fmt.Println("flush", x)
+				//fmt.Println("flush", x)
 			case NBD_CMD_TRIM:
-				fmt.Println("trim", x)
+				//fmt.Println("trim", x)
 			default:
 				panic("unknown command")
 			}
@@ -108,7 +112,7 @@ func handle(fd int, d Device) {
 
 func Client(d Device, offset int64, size int64) {
 	nbd, _ := os.Open("/dev/nbd0") // TODO: find a free one
-	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_INET, 0)
+	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
 	go handle(fd[1], d)
 	runtime.LockOSThread()
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
