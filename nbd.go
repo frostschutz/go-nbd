@@ -60,23 +60,24 @@ type request struct {
 	len    uint32
 }
 
+type reply struct {
+	magic  uint32
+	error  uint32
+	handle uint64
+}
+
 func handle(fd int, d Device) {
 	buf := make([]byte, 2<<19)
 	var x request
 
 	for {
-		n, err := syscall.Read(fd, buf[0:28])
-		if err != nil {
-			n += 1
-		}
-		//fmt.Println("actually read", n, err)
+		syscall.Read(fd, buf[0:28])
+
 		x.magic = binary.BigEndian.Uint32(buf)
 		x.typus = binary.BigEndian.Uint32(buf[4:8])
 		x.handle = binary.BigEndian.Uint64(buf[8:16])
 		x.from = binary.BigEndian.Uint64(buf[16:24])
 		x.len = binary.BigEndian.Uint32(buf[24:28])
-
-		//fmt.Println("read", x)
 
 		switch x.magic {
 		case NBD_REPLY_MAGIC:
@@ -84,20 +85,24 @@ func handle(fd int, d Device) {
 		case NBD_REQUEST_MAGIC:
 			switch x.typus {
 			case NBD_CMD_READ:
-				n, _ = d.ReadAt(buf[16:16+x.len], int64(x.from))
-				//fmt.Println("got", n, "bytes to send back")
+				d.ReadAt(buf[16:16+x.len], int64(x.from))
 				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
 				binary.BigEndian.PutUint32(buf[4:8], 0)
-				n, err = syscall.Write(fd, buf[0:16+x.len])
-				//fmt.Println("actually wrote", n-16, err)
+				syscall.Write(fd, buf[0:16+x.len])
 			case NBD_CMD_WRITE:
-				//fmt.Println("write", x)
+				n, _ := syscall.Read(fd, buf[28:28+x.len])
+				for uint32(n) < x.len {
+					m, _ := syscall.Read(fd, buf[28+n:28+x.len])
+					n += m
+				}
+				d.WriteAt(buf[28:28+x.len], int64(x.from))
+				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
+				binary.BigEndian.PutUint32(buf[4:8], 0)
+				syscall.Write(fd, buf[0:16])
 			case NBD_CMD_DISC:
 				panic("Disconnect")
 			case NBD_CMD_FLUSH:
-				//fmt.Println("flush", x)
 			case NBD_CMD_TRIM:
-				//fmt.Println("trim", x)
 			default:
 				panic("unknown command")
 			}
