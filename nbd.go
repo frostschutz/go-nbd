@@ -7,7 +7,7 @@ package nbd
 
 import (
 	"encoding/binary"
-	//"fmt"
+	"fmt"
 	"os"
 	"runtime"
 	"syscall"
@@ -102,7 +102,11 @@ func handle(fd int, d Device) {
 			case NBD_CMD_DISC:
 				panic("Disconnect")
 			case NBD_CMD_FLUSH:
+				fallthrough
 			case NBD_CMD_TRIM:
+				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
+				binary.BigEndian.PutUint32(buf[4:8], 1)
+				syscall.Write(fd, buf[0:16])
 			default:
 				panic("unknown command")
 			}
@@ -116,11 +120,30 @@ func handle(fd int, d Device) {
 }
 
 func Client(d Device, offset int64, size int64) {
-	nbd, _ := os.Open("/dev/nbd0") // TODO: find a free one
 	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
 	go handle(fd[1], d)
+
 	runtime.LockOSThread()
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
+
+	var nbd *os.File
+	var err error
+
+	// find free nbd device
+	for i := 0; ; i++ {
+		nbd, err = os.Open(fmt.Sprintf("/dev/nbd%d", i))
+		if err != nil {
+			// assume no more devices exist
+			panic("no free nbd device found")
+		}
+		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
+		if errno == 0 {
+			fmt.Println("found", "/dev/nbd", i)
+			break
+		} else {
+			fmt.Println("/dev/nbd", i, "was busy, trying next...")
+		}
+	}
+
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_BLKSIZE, 4096)
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SIZE_BLOCKS, uintptr(size/4096))
 	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_FLAGS, 1)
