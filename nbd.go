@@ -113,9 +113,6 @@ func handle(fd int, d Device) {
 		default:
 			panic("Invalid packet")
 		}
-
-		// syscall.Write(fd, buf[0:n])
-		// fmt.Println("wrote", buf[0:n])
 	}
 }
 
