@@ -66,6 +66,14 @@ type reply struct {
 	handle uint64
 }
 
+func ioctl(a1, a2, a3 uintptr) (err error) {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
+	if errno != 0 {
+		err = errno
+	}
+	return err
+}
+
 func handle(fd int, d Device) {
 	buf := make([]byte, 2<<19)
 	var x request
@@ -116,37 +124,53 @@ func handle(fd int, d Device) {
 	}
 }
 
-func Client(d Device, offset int64, size int64) {
-	fd, _ := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
+func Client(d Device, offset int64, size int64) (err error) {
+	var (
+		nbd *os.File
+	)
+
+	fd, err := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
+	if err != nil {
+		return err
+	}
+
 	go handle(fd[1], d)
 
 	runtime.LockOSThread()
 
-	var nbd *os.File
-	var err error
-
 	// find free nbd device
 	for i := 0; ; i++ {
 		nbd, err = os.Open(fmt.Sprintf("/dev/nbd%d", i))
+
 		if err != nil {
 			// assume no more devices exist
-			panic("no free nbd device found")
+			return err
 		}
-		_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
-		if errno == 0 {
-			fmt.Println("found", "/dev/nbd", i)
+
+		err = ioctl(nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
+
+		if err == nil {
+			fmt.Println("found /dev/nbd", i)
 			break
-		} else {
-			fmt.Println("/dev/nbd", i, "was busy, trying next...")
 		}
 	}
 
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_BLKSIZE, 4096)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_SIZE_BLOCKS, uintptr(size/4096))
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_SET_FLAGS, 1)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), BLKROSET, 0)  // || 1
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DO_IT, 0) // doesn't return
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_DISCONNECT, 0)
-	syscall.Syscall(syscall.SYS_IOCTL, nbd.Fd(), NBD_CLEAR_SOCK, 0)
+	if err = ioctl(nbd.Fd(), NBD_SET_BLKSIZE, 4096); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_BLKSIZE", err}
+	} else if err = ioctl(nbd.Fd(), NBD_SET_SIZE_BLOCKS, uintptr(size/4096)); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_SIZE_BLOCKS", err}
+	} else if err = ioctl(nbd.Fd(), NBD_SET_FLAGS, 1); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_FLAGS", err}
+	} else if err = ioctl(nbd.Fd(), BLKROSET, 0); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl BLKROSET", err}
+	} else if err = ioctl(nbd.Fd(), NBD_DO_IT, 0); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_DO_IT", err}
+	} else if err = ioctl(nbd.Fd(), NBD_DISCONNECT, 0); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_DISCONNECT", err}
+	} else if err = ioctl(nbd.Fd(), NBD_CLEAR_SOCK, 0); err != nil {
+		err = &os.PathError{nbd.Name(), "ioctl NBD_CLEAR_SOCK", err}
+	}
+
 	runtime.UnlockOSThread()
+	return err
 }
