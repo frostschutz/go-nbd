@@ -46,6 +46,15 @@ const (
 	// Do *not* use magics: 0x12560953 0x96744668.
 )
 
+// ioctl() helper function
+func ioctl(a1, a2, a3 uintptr) (err error) {
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
+	if errno != 0 {
+		err = errno
+	}
+	return err
+}
+
 // Device interface is a subset of os.File.
 type Device interface {
 	ReadAt(b []byte, off int64) (n int, err error)
@@ -66,20 +75,32 @@ type reply struct {
 	handle uint64
 }
 
-func ioctl(a1, a2, a3 uintptr) (err error) {
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, a1, a2, a3)
-	if errno != 0 {
-		err = errno
-	}
-	return err
+type NBD struct {
+	device Device
+	size   int64
+	nbd    *os.File
+	socket int
 }
 
-func handle(fd int, d Device) {
+func Create(device Device, size int64) *NBD {
+	if size >= 0 {
+		return &NBD{device, size, nil, 0}
+	}
+	return nil
+}
+
+// return true if connected
+func (nbd *NBD) IsConnected() bool {
+	return nbd.nbd != nil && nbd.socket > 0
+}
+
+// handle requests
+func (nbd *NBD) handle() {
 	buf := make([]byte, 2<<19)
 	var x request
 
 	for {
-		syscall.Read(fd, buf[0:28])
+		syscall.Read(nbd.socket, buf[0:28])
 
 		x.magic = binary.BigEndian.Uint32(buf)
 		x.typus = binary.BigEndian.Uint32(buf[4:8])
@@ -93,20 +114,20 @@ func handle(fd int, d Device) {
 		case NBD_REQUEST_MAGIC:
 			switch x.typus {
 			case NBD_CMD_READ:
-				d.ReadAt(buf[16:16+x.len], int64(x.from))
+				nbd.device.ReadAt(buf[16:16+x.len], int64(x.from))
 				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
 				binary.BigEndian.PutUint32(buf[4:8], 0)
-				syscall.Write(fd, buf[0:16+x.len])
+				syscall.Write(nbd.socket, buf[0:16+x.len])
 			case NBD_CMD_WRITE:
-				n, _ := syscall.Read(fd, buf[28:28+x.len])
+				n, _ := syscall.Read(nbd.socket, buf[28:28+x.len])
 				for uint32(n) < x.len {
-					m, _ := syscall.Read(fd, buf[28+n:28+x.len])
+					m, _ := syscall.Read(nbd.socket, buf[28+n:28+x.len])
 					n += m
 				}
-				d.WriteAt(buf[28:28+x.len], int64(x.from))
+				nbd.device.WriteAt(buf[28:28+x.len], int64(x.from))
 				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
 				binary.BigEndian.PutUint32(buf[4:8], 0)
-				syscall.Write(fd, buf[0:16])
+				syscall.Write(nbd.socket, buf[0:16])
 			case NBD_CMD_DISC:
 				panic("Disconnect")
 			case NBD_CMD_FLUSH:
@@ -114,7 +135,7 @@ func handle(fd int, d Device) {
 			case NBD_CMD_TRIM:
 				binary.BigEndian.PutUint32(buf[0:4], NBD_REPLY_MAGIC)
 				binary.BigEndian.PutUint32(buf[4:8], 1)
-				syscall.Write(fd, buf[0:16])
+				syscall.Write(nbd.socket, buf[0:16])
 			default:
 				panic("unknown command")
 			}
@@ -124,45 +145,42 @@ func handle(fd int, d Device) {
 	}
 }
 
-func Client(d Device, offset int64, size int64) (err error) {
-	var (
-		nbd *os.File
-	)
+// connect the network block device
+func (nbd *NBD) Connect() (dev string, err error) {
+	pair, err := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
 
-	fd, err := syscall.Socketpair(syscall.SOCK_STREAM, syscall.AF_UNIX, 0)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	go handle(fd[1], d)
-
-	runtime.LockOSThread()
 
 	// find free nbd device
 	for i := 0; ; i++ {
-		nbd, err = os.Open(fmt.Sprintf("/dev/nbd%d", i))
-
-		if err != nil {
-			// assume no more devices exist
-			return err
+		dev = fmt.Sprintf("/dev/nbd%d", i)
+		if _, err = os.Stat(dev); os.IsNotExist(err) {
+			dev = ""
+			break // no more devices
+		}
+		if _, err = os.Stat(fmt.Sprintf("/sys/block/nbd%d/pid", i)); !os.IsNotExist(err) {
+			continue // busy
 		}
 
-		err = ioctl(nbd.Fd(), NBD_SET_SOCK, uintptr(fd[0]))
-
-		if err == nil {
-			fmt.Println("found /dev/nbd", i)
-			break
+		if nbd.nbd, err = os.Open(dev); err == nil {
+			// possible candidate
+			ioctl(nbd.nbd.Fd(), BLKROSET, 0) // I'm really sorry about this
+			if err := ioctl(nbd.nbd.Fd(), NBD_SET_SOCK, uintptr(pair[0])); err == nil {
+				nbd.socket = pair[1]
+				break // success
+			}
 		}
 	}
 
+	// setup
 	if err = ioctl(nbd.Fd(), NBD_SET_BLKSIZE, 4096); err != nil {
 		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_BLKSIZE", err}
 	} else if err = ioctl(nbd.Fd(), NBD_SET_SIZE_BLOCKS, uintptr(size/4096)); err != nil {
 		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_SIZE_BLOCKS", err}
 	} else if err = ioctl(nbd.Fd(), NBD_SET_FLAGS, 1); err != nil {
 		err = &os.PathError{nbd.Name(), "ioctl NBD_SET_FLAGS", err}
-	} else if err = ioctl(nbd.Fd(), BLKROSET, 0); err != nil {
-		err = &os.PathError{nbd.Name(), "ioctl BLKROSET", err}
 	} else if err = ioctl(nbd.Fd(), NBD_DO_IT, 0); err != nil {
 		err = &os.PathError{nbd.Name(), "ioctl NBD_DO_IT", err}
 	} else if err = ioctl(nbd.Fd(), NBD_DISCONNECT, 0); err != nil {
