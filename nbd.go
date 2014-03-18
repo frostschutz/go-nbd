@@ -144,16 +144,25 @@ func (nbd *NBD) Connect() (dev string, err error) {
 		// already set by nbd.Size()
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_SET_FLAGS, 1); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_SET_FLAGS", err}
-	} else if err = ioctl(nbd.nbd.Fd(), NBD_DO_IT, 0); err != nil {
+	} else {
+		go nbd.do_it()
+	}
+
+	return dev, err
+}
+
+func (nbd *NBD) do_it() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	// NBD_DO_IT does not return until disconnect
+	if err = ioctl(nbd.nbd.Fd(), NBD_DO_IT, 0); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DO_IT", err}
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_DISCONNECT, 0); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DISCONNECT", err}
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_CLEAR_SOCK, 0); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_CLEAR_SOCK", err}
 	}
-
-	runtime.UnlockOSThread()
-	return dev, err
 }
 
 // handle requests
