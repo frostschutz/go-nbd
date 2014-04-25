@@ -1,6 +1,5 @@
-// This file is part of fs1up.
 // Copyright (C) 2014 Andreas Klauer <Andreas.Klauer@metamorpher.de>
-// License: GPL-2
+// License: MIT
 
 // Package nbd uses the Linux NBD layer to emulate a block device in user space
 package nbd
