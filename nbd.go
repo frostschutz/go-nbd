@@ -155,7 +155,7 @@ func (nbd *NBD) do_it() {
 	defer runtime.UnlockOSThread()
 
 	// NBD_DO_IT does not return until disconnect
-	if err = ioctl(nbd.nbd.Fd(), NBD_DO_IT, 0); err != nil {
+	if err := ioctl(nbd.nbd.Fd(), NBD_DO_IT, 0); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DO_IT", err}
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_DISCONNECT, 0); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DISCONNECT", err}
