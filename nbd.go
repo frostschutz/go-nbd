@@ -146,24 +146,34 @@ func (nbd *NBD) Connect() (dev string, err error) {
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_SET_FLAGS, 1); err != nil {
 		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_SET_FLAGS", err}
 	} else {
-		go nbd.do_it()
+		c := make(chan error)
+		go nbd.do_it(c)
+		for {
+			select {
+			case err = <-c:
+				return dev, err
+			default:
+				nbd.handle()
+			}
+		}
 	}
 
 	return dev, err
 }
 
-func (nbd *NBD) do_it() {
+func (nbd *NBD) do_it(c chan error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	// NBD_DO_IT does not return until disconnect
 	if err := ioctl(nbd.nbd.Fd(), NBD_DO_IT, 0); err != nil {
-		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DO_IT", err}
+		c <- &os.PathError{nbd.nbd.Name(), "ioctl NBD_DO_IT", err}
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_DISCONNECT, 0); err != nil {
-		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_DISCONNECT", err}
+		c <- &os.PathError{nbd.nbd.Name(), "ioctl NBD_DISCONNECT", err}
 	} else if err = ioctl(nbd.nbd.Fd(), NBD_CLEAR_SOCK, 0); err != nil {
-		err = &os.PathError{nbd.nbd.Name(), "ioctl NBD_CLEAR_SOCK", err}
+		c <- &os.PathError{nbd.nbd.Name(), "ioctl NBD_CLEAR_SOCK", err}
 	}
+
 }
 
 // handle requests
