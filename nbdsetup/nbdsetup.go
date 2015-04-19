@@ -22,7 +22,10 @@ func main() {
 		os.Exit(1)
 	}
 	stat, _ := device.Stat()
-	nbd.Create(device, stat.Size())
+	dev, err := nbd.Create(device, stat.Size()).Connect()
+
+	fmt.Println(dev)
+	fmt.Println(err)
 }
 
 // End of file.
