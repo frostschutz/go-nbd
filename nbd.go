@@ -37,8 +37,10 @@ const (
 	NBD_FLAG_HAS_FLAGS  = (1 << 0) // nbd-server supports flags
 	NBD_FLAG_READ_ONLY  = (1 << 1) // device is read-only
 	NBD_FLAG_SEND_FLUSH = (1 << 2) // can flush writeback cache
-	// there is a gap here to match userspace
-	NBD_FLAG_SEND_TRIM = (1 << 5) // send trim/discard
+	NBD_FLAG_SEND_FUA   = (1 << 3) // Send FUA (Force Unit Access)
+	NBD_FLAG_ROTATIONAL = (1 << 4) // Use elevator algorithm - rotational media
+	NBD_FLAG_SEND_TRIM  = (1 << 5) // Send TRIM (discard)
+
 	// These are sent over the network in the request/reply magic fields
 	NBD_REQUEST_MAGIC = 0x25609513
 	NBD_REPLY_MAGIC   = 0x67446698
