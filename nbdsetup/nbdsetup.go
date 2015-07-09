@@ -14,9 +14,19 @@ import (
 
 func main() {
 	file := flag.String("file", "", "regular file or block device")
+	write := flag.Bool("write", false, "use true for read-write mode")
 	flag.Parse()
-	fmt.Printf("Using %s\n", *file)
+	if *file == "" {
+		flag.Usage()
+		os.Exit(2)
+	}
+	fmt.Printf("Using %s in read", *file)
 	device, err := os.Open(*file)
+	if *write {
+		fmt.Printf("-write")
+		device, err = os.OpenFile(*file, os.O_RDWR, os.FileMode(0666))
+	}
+	fmt.Printf(" mode.\n")
 	if err != nil {
 		fmt.Println(err)
 		os.Exit(1)
